@@ -1,0 +1,153 @@
+-- TYPES DEFINITION
+
+CREATE OR REPLACE TYPE CustomerTy AS OBJECT(
+FC CHAR(16),
+CName VARCHAR2(30),
+Sex CHAR(1),
+DoB DATE,
+City VARCHAR2(20),
+Phone INTEGER(10),
+Mail VARCHAR2(40));
+/
+CREATE OR REPLACE TYPE HotelTy AS OBJECT(
+HName VARCHAR2(20),
+City VARCHAR2(20));
+/
+CREATE OR REPLACE TYPE RoomTy AS OBJECT(
+Code INTEGER(3),
+Price NUMBER(6,2),
+NrBeds INTEGER(1),
+Smokers CHAR(1),
+Hotel REF HotelTy);
+/
+CREATE OR REPLACE TYPE InvoiceTy AS OBJECT(
+TransactionID INTEGER(10),
+Total NUMBER(7,2),
+Balance VARCHAR2(40));
+/
+CREATE OR REPLACE TYPE ReserveTy AS OBJECT(
+Arrival DATE,
+Departure DATE,
+Room REF RoomTy,
+Invoice REF InvoiceTy,
+MEMBER FUNCTION getRoomCost RETURN NUMBER);
+/
+CREATE OR REPLACE TYPE BODY ReserveTy AS
+MEMBER FUNCTION getRoomCost RETURN NUMBER IS
+price NUMBER(6,2);
+BEGIN
+SELECT DEREF(Room).Price INTO price FROM DUAL;
+RETURN (Departure - Arrival) * price;
+END getRoomCost;
+END;
+/
+CREATE OR REPLACE TYPE ReserveArray AS VARRAY(10) OF REF ReserveTy;
+/
+CREATE OR REPLACE TYPE ConfirmTy AS OBJECT(
+Prepayment CHAR(1),
+CreditCard INTEGER(16));
+/
+CREATE OR REPLACE TYPE BookingTy AS OBJECT(
+BookingID INTEGER(6),
+BookMethod VARCHAR2(7),
+Park CHAR(1),
+CheckIn DATE,
+Customer REF CustomerTy,
+Confirm ConfirmTy,
+ReserveList ReserveArray);
+/
+
+
+-- TABLES CREATION
+
+CREATE TABLE Customers OF CustomerTy(
+FC PRIMARY KEY,
+CName NOT NULL,
+Sex NOT NULL,
+DoB NOT NULL,
+City NOT NULL,
+Phone NOT NULL);
+/
+CREATE TABLE Hotels OF HotelTy(
+HName PRIMARY KEY,
+City NOT NULL);
+/
+CREATE TABLE Rooms OF RoomTy(
+Code NOT NULL,
+Price NOT NULL,
+NrBeds NOT NULL,
+Smokers NOT NULL,
+Hotel NOT NULL);
+/
+CREATE TABLE Invoices OF InvoiceTy(
+TransactionID PRIMARY KEY,
+Total NOT NULL,
+Balance NOT NULL);
+/
+CREATE TABLE Reserve OF ReserveTy(
+Arrival NOT NULL,
+Departure NOT NULL,
+Room NOT NULL);
+/
+CREATE TABLE Bookings OF BookingTy(
+BookingID PRIMARY KEY,
+BookMethod NOT NULL,
+Park NOT NULL,
+Customer NOT NULL,
+ReserveList NOT NULL);
+/
+
+
+-- TRIGGERS DEFINITION
+
+CREATE OR REPLACE TRIGGER creditCardCheck
+BEFORE INSERT OR UPDATE OF Confirm ON Bookings
+FOR EACH ROW
+WHEN (NEW.Confirm IS NOT NULL)
+BEGIN
+IF :NEW.Confirm.CreditCard IS NULL AND :NEW.Confirm.Prepayment<>'T' THEN
+    RAISE_APPLICATION_ERROR(-20999, 'Pay for your booking or provide a credit card number');
+END IF;
+END;
+/
+CREATE OR REPLACE TRIGGER validateCheckIn
+BEFORE UPDATE OF CheckIn ON Bookings
+FOR EACH ROW
+BEGIN
+IF :NEW.Confirm IS NULL THEN
+    RAISE_APPLICATION_ERROR(-20998, 'Unconfirmed booking');
+END IF;
+END;
+/
+CREATE OR REPLACE TRIGGER bookingCheck
+BEFORE INSERT ON Reserve
+FOR EACH ROW
+DECLARE
+x INTEGER;
+BEGIN
+IF :NEW.Arrival >= :NEW.Departure THEN
+    RAISE_APPLICATION_ERROR(-20997, 'Invalid dates');
+END IF;
+SELECT COUNT(*) INTO x FROM Reserve WHERE :NEW.Room = Room AND :NEW.Arrival < Departure AND :NEW.Departure > Arrival;
+IF x > 0 THEN
+    RAISE_APPLICATION_ERROR(-20996, 'Room not available');
+END IF;
+END;
+/
+CREATE OR REPLACE TRIGGER makeRoomsAvailable
+AFTER DELETE ON Bookings
+FOR EACH ROW
+DECLARE
+i INTEGER;
+BEGIN
+FOR i IN 1..:OLD.ReserveList.COUNT LOOP
+    DELETE FROM Reserve r WHERE REF(r)=:OLD.ReserveList(i);
+END LOOP;
+END;
+/
+
+
+-- INDEX CREATION
+
+CREATE INDEX dateIndex ON Reserve(Arrival DESC, Departure DESC);
+/
